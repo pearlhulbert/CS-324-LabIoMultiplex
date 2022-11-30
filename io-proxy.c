@@ -329,14 +329,18 @@ void handle_client(struct client_info* active_client) {
 }
 
 void readClientReq(struct client_info* active_client) {
-	char request[MAX_OBJECT_SIZE], method[16], hostname[64], port[8], path[64], headers[1024];
-	int nread = 0;
-	int bytesRead = 0;
-	char buf[MAX_OBJECT_SIZE];
-	while (parse_request(request, method, hostname, port, path, headers)) {
-		nread = read(active_client->fd, buf + bytesRead, 256);
+	
+	char readBuf[MAX_OBJECT_SIZE];
+	int nread = read(active_client->fd, readBuf, MAX_OBJECT_SIZE);
+	active_client->bytesReadClient = nread;
+	while (!all_headers_received(readBuf)) {
+		nread = read(active_client->fd, readBuf + active_client->bytesReadClient, 256);
 		active_client->bytesReadClient += nread;
 	}
+	
+	char method[16], hostname[64], port[8], path[64], headers[1024];
+
+	parse_request(readBuf, method, hostname, port, path, headers);
 
 
 	if (atoi(port) == 80) {
