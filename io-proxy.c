@@ -117,7 +117,7 @@ int main(int argc, char ** argv)
 				exit(1);
 			}
 
-			printf("New event for %s\n", active_client->desc);
+			//printf("New event for %s\n", active_client->desc);
 
 			if ((events[i].events & EPOLLERR) ||
 					(events[i].events & EPOLLHUP) ||
@@ -246,23 +246,25 @@ int open_sfd(int port) {
 	int optval = 1;
 	setsockopt(sfd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
 
-	// set listening file descriptor non-blocking
-	if (fcntl(sfd, F_SETFL, fcntl(sfd, F_GETFL, 0) | O_NONBLOCK) < 0) {
-		fprintf(stderr, "error setting socket option\n");
-		exit(1);
-	}
 	if (bind(sfd, local_addr, local_addr_len) < 0) {
 		perror("Could not bind");
 		exit(EXIT_FAILURE);
 	}
 
 	listen(sfd, 100);
+
+	// set listening file descriptor non-blocking
+	if (fcntl(sfd, F_SETFL, fcntl(sfd, F_GETFL, 0) | O_NONBLOCK) < 0) {
+		fprintf(stderr, "error setting socket option\n");
+		exit(1);
+	}
+
 	return sfd;
 }
 
 void handle_new_clients(struct client_info *active_client) {
 
-	printf("called handle_new_clients\n");
+	//printf("called handle_new_clients\n");
 
 	struct sockaddr_storage clientaddr;
 	int connfd;
@@ -300,7 +302,7 @@ void handle_new_clients(struct client_info *active_client) {
 		new_client->bytesWroteServer = 0;
 		bzero(new_client->response, MAX_OBJECT_SIZE);
 		bzero(new_client->request, MAX_OBJECT_SIZE);
-		sprintf(new_client->desc, "Client with file descriptor %d", connfd);
+		//sprintf(new_client->desc, "Client with file descriptor %d", connfd);
 
 		// register the client file descriptor
 
@@ -317,7 +319,7 @@ void handle_new_clients(struct client_info *active_client) {
 
 void handle_client(struct client_info* active_client) {
 	printf("called handle client\n");
-	printf(" state: %d\n", active_client->state);
+	printf("state: %d\n", active_client->state);
     switch (active_client->state) {
 	 	case 0:
 	 		readClientReq(active_client);
@@ -340,21 +342,28 @@ void handle_client(struct client_info* active_client) {
 
 void readClientReq(struct client_info* active_client) {
 
-	printf("reading from client\n");
-	int nread;
+	//printf("reading from client\n");
+	int nread = 0;
 	while (!all_headers_received(active_client->request)) {
-		if ((nread = read(active_client->fd, active_client->request + active_client->bytesReadClient, 256)) < 0) {
-			printf("%s\n", strerror(errno));
-			printf("errno %d\n", errno);
+		nread = read(active_client->fd, active_client->request + active_client->bytesReadClient, 256);
+		if (nread < 0) {
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
 				return;
 			}
+			else {
+				printf("error read readClientReq %s\n", strerror(errno));
+				//printf("errno %d\n", errno);
+			}
 			break;
 		}
-		active_client->bytesReadClient += nread;
+		else {
+			active_client->bytesReadClient += nread;
+			printf("nread readClientReq %d\n", nread);
+		}
+		
 	}
 
-	printf("readBuf: %s\n", active_client->request);
+	printf("reading: %s\n", active_client->request);
 	
 	char method[16], hostname[64], port[8], path[64], headers[1024];
 
@@ -368,7 +377,7 @@ void readClientReq(struct client_info* active_client) {
 		sprintf(active_client->request, "%s %s %sHost: %s:%s\r\n%s%s%s", method, path, httpProtocol, hostname, port, user_agent_hdr, connectClose, proxyConnectClose);
 	}
 
-	printf("%s\n", active_client->request);
+	printf("request: %s\n", active_client->request);
 
 	struct addrinfo hints;
 	struct addrinfo *result;
@@ -385,6 +394,11 @@ void readClientReq(struct client_info* active_client) {
 	sfd = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
 
 	connect(sfd, result->ai_addr, result->ai_addrlen);
+
+	if (fcntl(sfd, F_SETFL, fcntl(sfd, F_GETFL, 0) | O_NONBLOCK) < 0) {
+		fprintf(stderr, "error setting socket option\n");
+		exit(1);
+	}
 
 	active_client->sfd = sfd;
 
@@ -407,10 +421,26 @@ void readClientReq(struct client_info* active_client) {
 }
 
 void sendProxyReq(struct client_info* active_client) {
-	printf("gonna write proxy req\n");
+	//printf("gonna write proxy req state %d \n", active_client->state);
 
-	active_client->bytesWroteClient = write(active_client->sfd, active_client->request, active_client->bytesReadClient);
-	printf("wrote: %d\n", active_client->bytesWroteClient); 
+	int nwrote = 0;
+	while (strlen(active_client->request) != active_client->bytesWroteClient) {
+		nwrote = write(active_client->sfd, (active_client->request + active_client->bytesWroteClient), (strlen(active_client->request) - active_client->bytesWroteClient));
+		if (nwrote < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				return;
+			}
+			else {
+				printf("error writing sendProxyReq %s\n", strerror(errno));
+			}
+		}
+		else {
+			active_client->bytesWroteClient += nwrote;
+			printf("nwrote sendProxyReq %d\n", nwrote);
+		}
+	}
+
+	//printf("wrote: %d\n", active_client->bytesWroteClient); 
 
 	struct epoll_event event;
 	event.data.ptr = active_client;
@@ -421,18 +451,36 @@ void sendProxyReq(struct client_info* active_client) {
 	}
 
 	active_client->state = 2;
+	printf("finish writing proxy state %d\n", active_client->state);
 }
 
 void readServerRes(struct client_info* active_client) {
-	int nread;
-	int bytesRead = 0;
-	printf("gonna read from server\n");
-	while ((nread = read(active_client->sfd, active_client->response + bytesRead, 256)) != 0) {
-		bytesRead += nread;
-		active_client->bytesReadServer += bytesRead;
+	int nread = 1;
+	printf("gonna read from server state %d\n", active_client->state);
+	while (nread != 0) {
+		nread = read(active_client->sfd, (active_client->response + active_client->bytesReadServer), 256);
+		if (nread < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				return;
+			}
+			else {
+				printf("error read readServerRes %s\n", strerror(errno));
+				if (epoll_ctl(efd, EPOLL_CTL_DEL, active_client->sfd, NULL) < 0) {
+					fprintf(stderr, "error deleting event readServerRes\n");
+					exit(1);
+				}
+				close(active_client->sfd);
+				close(active_client->fd);
+				return;
+			}
+		}
+		else {
+			active_client->bytesReadServer += nread;
+			printf("nread readServerRes %d\n", nread);
+		}
 	}
 
-	printf("%s\n", active_client->response);
+	printf("response %s\n", active_client->response);
 
 	if (epoll_ctl(efd, EPOLL_CTL_DEL, active_client->sfd, NULL) < 0) {
 		fprintf(stderr, "error deleting event readServerRes\n");
@@ -447,21 +495,41 @@ void readServerRes(struct client_info* active_client) {
 		exit(1);
 	}
 
+	active_client->state = 3;
+
 	if (close(active_client->sfd) < 0) {
-		printf("%s\n", strerror(errno));
+		printf(" close sfd %s\n", strerror(errno));
 	}
 	else {
-		printf("closed %d\n", active_client->sfd);
+		printf("closed sfd %d\n", active_client->sfd);
 	}
 
-	active_client->state = 3;
+	printf("finish reading server state %d \n", active_client->state);
 }
 
 void sendProxyRes(struct client_info* active_client) {
 
 	printf("gonna write to server\n");
 
-	active_client->bytesWroteServer = write(active_client->fd, active_client->response, active_client->bytesReadServer);
+	printf("active_client fd %d\n", active_client->fd);
+
+	int nwrote = 0;
+	while (active_client->bytesReadServer != active_client->bytesWroteServer) {
+		nwrote = write(active_client->fd, (active_client->response + active_client->bytesWroteServer), (active_client->bytesReadServer - active_client->bytesWroteServer));
+		if (nwrote < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				return;
+			}
+			else {
+				printf("error write sendProxyRes %s\n", strerror(errno));
+			}
+		}
+		else {
+			active_client->bytesWroteServer += nwrote;
+			printf("nwrote sendProxyRes %d\n", nwrote);
+		}
+	}
+
 
 	if (epoll_ctl(efd, EPOLL_CTL_DEL, active_client->fd, NULL) < 0) {
 		fprintf(stderr, "error deleting event sendProxyRes\n");
@@ -469,11 +537,12 @@ void sendProxyRes(struct client_info* active_client) {
 	}
 
 	if (close(active_client->fd) < 0) {
-		printf("%s\n", strerror(errno));
+		printf("close active_client fd %s\n", strerror(errno));
 	}
 	else {
-		printf("closed %d\n", active_client->fd);
+		printf("closed fd %d\n", active_client->fd);
 	}
+
 }
 
 
